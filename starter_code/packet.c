@@ -7,11 +7,13 @@ static tcp_packet zero_packet = {.hdr={0}};
  */
 tcp_packet* make_packet(int len)
 {
-    tcp_packet *pkt;
-    pkt = malloc(TCP_HDR_SIZE + len);
+    tcp_packet *pkt; // pointer to tcp_packet
 
-    *pkt = zero_packet;
-    pkt->hdr.data_size = len;
+    pkt = malloc(TCP_HDR_SIZE + len); // allocate memory with a total size of TCP_HDR_SIZE + len
+
+    *pkt = zero_packet; // ensure all fields are zero 
+
+    pkt->hdr.data_size = len; // set specified len to indicate the size of the data payload
     return pkt;
 }
 

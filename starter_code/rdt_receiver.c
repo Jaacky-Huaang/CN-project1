@@ -84,6 +84,8 @@ int main(int argc, char **argv) {
     VLOG(DEBUG, "epoch time, bytes received, sequence number");
 
     clientlen = sizeof(clientaddr);
+
+    // loop until end fo file is reached 
     while (1) {
         /*
          * recvfrom: receive a UDP datagram from a client
@@ -93,29 +95,37 @@ int main(int argc, char **argv) {
                 (struct sockaddr *) &clientaddr, (socklen_t *)&clientlen) < 0) {
             error("ERROR in recvfrom");
         }
-        recvpkt = (tcp_packet *) buffer;
+
+        recvpkt = (tcp_packet *) buffer; // casting into a receiver packet 
+
         assert(get_data_size(recvpkt) <= DATA_SIZE);
+
+        // check if we received the special packet (significies the end of the file has been reached)
         if ( recvpkt->hdr.data_size == 0) {
             //VLOG(INFO, "End Of File has been reached");
             fclose(fp);
             break;
         }
-        /* 
-         * sendto: ACK back to the client 
-         */
-        gettimeofday(&tp, NULL);
-        VLOG(DEBUG, "%lu, %d, %d", tp.tv_sec, recvpkt->hdr.data_size, recvpkt->hdr.seqno);
 
+        // send ACK back to the client
+        gettimeofday(&tp, NULL); // get current time
+        VLOG(DEBUG, "%lu, %d, %d", tp.tv_sec, recvpkt->hdr.data_size, recvpkt->hdr.seqno); // print details of each packet
+        
+        // received data is written to the file fp
         fseek(fp, recvpkt->hdr.seqno, SEEK_SET);
         fwrite(recvpkt->data, 1, recvpkt->hdr.data_size, fp);
+
+        // send ACK packet 
         sndpkt = make_packet(0);
-        sndpkt->hdr.ackno = recvpkt->hdr.seqno + recvpkt->hdr.data_size;
+        sndpkt->hdr.ackno = recvpkt->hdr.seqno + recvpkt->hdr.data_size; // set ackno field to seq number 
         sndpkt->hdr.ctr_flags = ACK;
+
+        // send ACK packet back to sender
         if (sendto(sockfd, sndpkt, TCP_HDR_SIZE, 0, 
                 (struct sockaddr *) &clientaddr, clientlen) < 0) {
             error("ERROR in sendto");
         }
-    }
+    } // loop ends after end of file reached, file is closed, receiver program terminates 
 
     return 0;
 }

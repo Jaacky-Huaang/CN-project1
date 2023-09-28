@@ -15,23 +15,23 @@
 #include"common.h"
 
 #define STDIN_FD    0
-#define RETRY  120 //millisecond
+#define RETRY  120      // millisecond - timeout duration for retransmitting packets
 
-int next_seqno=0;
-int send_base=0;
-int window_size = 1;
+int next_seqno=0; 
+int send_base=0;        // seq # of base packet in the sender's window
+int window_size = 1; 
 
 int sockfd, serverlen;
 struct sockaddr_in serveraddr;
-struct itimerval timer; 
-tcp_packet *sndpkt;
-tcp_packet *recvpkt;
-sigset_t sigmask;       
+struct itimerval timer; // stores information about th etimer used for retransmisstion
+tcp_packet *sndpkt;     // packet for sending data
+tcp_packet *recvpkt;    // packet for receiving data
+sigset_t sigmask;       // signal for triggering an action 
 
 
 void resend_packets(int sig)
 {
-    if (sig == SIGALRM)
+    if (sig == SIGALRM) // if signal happened, resend the packet
     {
         //Resend all packets range between 
         //sendBase and nextSeqNum
@@ -47,8 +47,8 @@ void resend_packets(int sig)
 
 void start_timer()
 {
-    sigprocmask(SIG_UNBLOCK, &sigmask, NULL);
-    setitimer(ITIMER_REAL, &timer, NULL);
+    sigprocmask(SIG_UNBLOCK, &sigmask, NULL); // unblock the signal 
+    setitimer(ITIMER_REAL, &timer, NULL); // store starting time
 }
 
 
@@ -58,14 +58,10 @@ void stop_timer()
 }
 
 
-/*
- * init_timer: Initialize timer
- * delay: delay in milliseconds
- * sig_handler: signal handler function for re-sending unACKed packets
- */
+// takes delay and the function that would handle the signal (resend unACKed packets)
 void init_timer(int delay, void (*sig_handler)(int)) 
 {
-    signal(SIGALRM, sig_handler);
+    signal(SIGALRM, sig_handler);               // set up the signal handler for SIGALRM
     timer.it_interval.tv_sec = delay / 1000;    // sets an interval of the timer
     timer.it_interval.tv_usec = (delay % 1000) * 1000;  
     timer.it_value.tv_sec = delay / 1000;       // sets an initial value
@@ -120,25 +116,36 @@ int main (int argc, char **argv)
 
     //Stop and wait protocol
 
-    init_timer(RETRY, resend_packets);
+    init_timer(RETRY, resend_packets); // initialize timer with retry and signal handler
     next_seqno = 0;
-    while (1)
+
+    while (1) // continue until the end of the file is reached
     {
+        // data read from file fp into the buffer with max length of DATA_SIZE
         len = fread(buffer, 1, DATA_SIZE, fp);
+
+        // if no data read, would indicate end of file 
         if ( len <= 0)
         {
             VLOG(INFO, "End Of File has been reached");
+
+            // send a special packet with data size 0 to receiver so that receiver also knows that 
+                // it is the end of the file 
             sndpkt = make_packet(0);
             sendto(sockfd, sndpkt, TCP_HDR_SIZE,  0,
                     (const struct sockaddr *)&serveraddr, serverlen);
             break;
         }
-        send_base = next_seqno;
+
+        send_base = next_seqno; 
         next_seqno = send_base + len;
-        sndpkt = make_packet(len);
-        memcpy(sndpkt->data, buffer, len);
+        sndpkt = make_packet(len); // create packet with updated len
+
+        memcpy(sndpkt->data, buffer, len); // data copied from the buffer into the packet
+
         sndpkt->hdr.seqno = send_base;
-        //Wait for ACK
+
+        // loop for sending packets created 
         do {
 
             VLOG(DEBUG, "Sending packet %d to %s", 
@@ -158,6 +165,7 @@ int main (int argc, char **argv)
             //ssize_t recvfrom(int sockfd, void *buf, size_t len, int flags,
             //struct sockaddr *src_addr, socklen_t *addrlen);
 
+            // enter a loop to wait for an ACK
             do
             {
                 if(recvfrom(sockfd, buffer, MSS_SIZE, 0,
@@ -166,13 +174,19 @@ int main (int argc, char **argv)
                     error("recvfrom");
                 }
 
-                recvpkt = (tcp_packet *)buffer;
+                recvpkt = (tcp_packet *)buffer; // received data is cast to a tcp_packet struct 
                 printf("%d \n", get_data_size(recvpkt));
+
+                // check if the size of received data is within expected limits 
                 assert(get_data_size(recvpkt) <= DATA_SIZE);
-            }while(recvpkt->hdr.ackno < next_seqno);    //ignore duplicate ACKs
+
+            }while(recvpkt->hdr.ackno < next_seqno); // continue as long as there is no duplicates
+            
+            // when expected ACK is received or the loop exits, sender stops the timer 
             stop_timer();
+
             /*resend pack if don't recv ACK */
-        } while(recvpkt->hdr.ackno != next_seqno);      
+        } while(recvpkt->hdr.ackno != next_seqno); // makes sure resend if not expected ACK number (next_seqno) or timeout     
 
         free(sndpkt);
     }
