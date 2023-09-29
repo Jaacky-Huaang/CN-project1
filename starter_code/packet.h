@@ -1,6 +1,6 @@
 enum packet_type {
-    DATA,   // packet type that is used for transmitting data - if a packet has the DATA type, it typically contains actual data payload
-    ACK,    // acknowledgement #
+    DATA,
+    ACK,
 };
 
 typedef struct {
@@ -10,16 +10,22 @@ typedef struct {
     int data_size;
 }tcp_header;
 
-#define MSS_SIZE    1500    // maximum segment size in a single packet
-#define UDP_HDR_SIZE    8   
+#define MSS_SIZE    1500
+#define UDP_HDR_SIZE    8
 #define IP_HDR_SIZE    20
 #define TCP_HDR_SIZE    sizeof(tcp_header)
 #define DATA_SIZE   (MSS_SIZE - TCP_HDR_SIZE - UDP_HDR_SIZE - IP_HDR_SIZE)
-
 typedef struct {
     tcp_header  hdr;
-    char    data[0];    // flexible array member (can be populated according to the size of data payload)
+    char    data[0];
 }tcp_packet;
+
+typedef struct {
+    tcp_packet *packet;  // Pointer to the actual packet
+    int is_sent;         // 1 if packet is sent, 0 otherwise
+    int is_acked;        // 1 if ACK is received for this packet, 0 otherwise
+    timeval sent_time;   // Time at which packet was sent
+} PacketStatus;
 
 tcp_packet* make_packet(int seq);
 int get_data_size(tcp_packet *pkt);
