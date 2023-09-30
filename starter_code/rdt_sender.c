@@ -150,17 +150,19 @@ int main (int argc, char **argv)
     int portno, len;
     int next_seqno;
     char *hostname;
-    char buffer[DATA_SIZE];
+    char buffer[MSS_SIZE];
     FILE *fp;
 
     PacketStatus window[window_size];
 
     printf("parsing arguments\n");
     /* check command line arguments */
+    
     if (argc != 4) {
         fprintf(stderr,"usage: %s <hostname> <port> <FILE>\n", argv[0]);
         exit(0);
     }
+    
     hostname = argv[1];
     portno = atoi(argv[2]);
     fp = fopen(argv[3], "r");
@@ -220,6 +222,20 @@ int main (int argc, char **argv)
             
             //read data from the file, "len" is the data size of the current packet i
             len = fread(buffer, 1, DATA_SIZE, fp);
+            printf("len: %d\n", len);
+
+            fseek(fp, 0, SEEK_END);
+            int file_size = ftell(fp);
+            printf("File size: %ld bytes\n", file_size);
+            fseek(fp, 0, SEEK_SET);
+            if (feof(fp)) 
+            {
+                printf("End of file by system\n");
+            } else if (ferror(fp)) 
+            {
+                perror("Error reading file");
+            }
+
 
             //if EOF is reached, send an empty packet
             if (len <= 0)
@@ -266,6 +282,7 @@ int main (int argc, char **argv)
             //?
             if (i==0)
             {   
+
                 //record current time in current_time
                 gettimeofday(&current_time,NULL);
                 //calculate the time that the first packet has spent in flight
@@ -278,20 +295,21 @@ int main (int argc, char **argv)
                 {
                     flight_time = 1/100000;
                 }
-                
+                printf("initializing timer\n");
                 init_timer(RETRY-flight_time, resend_packets);
                 start_timer();
             }
 
             //free up the memory after sent
             //memset(sndpkt->data,0, strlen(buffer[0]));
-            free(sndpkt);
+            
 
             //if the first packet is sent, it becomes the oldest packet in flight
             //so we start the timer of it
-            
+            free(sndpkt);
 
         }
+        
     
 
         char ack_buffer[MSS_SIZE];
