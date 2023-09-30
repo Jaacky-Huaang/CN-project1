@@ -155,6 +155,7 @@ int main (int argc, char **argv)
 
     PacketStatus window[window_size];
 
+    printf("parsing arguments\n");
     /* check command line arguments */
     if (argc != 4) {
         fprintf(stderr,"usage: %s <hostname> <port> <FILE>\n", argv[0]);
@@ -167,12 +168,13 @@ int main (int argc, char **argv)
         error(argv[3]);
     }
 
+    printf("creating socket\n");
     /* socket: create the socket */
     sockfd = socket(AF_INET, SOCK_DGRAM, 0);
     if (sockfd < 0) 
         error("ERROR opening socket");
 
-
+    printf("initializing server\n");
     /* initialize server server details */
     bzero((char *) &serveraddr, sizeof(serveraddr));
     serverlen = sizeof(serveraddr);
@@ -183,6 +185,7 @@ int main (int argc, char **argv)
         exit(0);
     }
 
+    printf("setting server address\n");
     /* build the server's Internet address */
     serveraddr.sin_family = AF_INET;
     serveraddr.sin_port = htons(portno);
@@ -198,6 +201,7 @@ int main (int argc, char **argv)
         initialize_window_slot(window[i]);
     }
 
+    printf("Entering the main loop\n");
     //loop while EOF is not reached
     while (1)
     {   
@@ -208,7 +212,8 @@ int main (int argc, char **argv)
         //if the window is full, start_empty_index=window_size
         //the loop would not be entered, and would be waiting for ACK
         //if there are empty slots in the window, fill them with packets and send them out
-
+        
+        printf("entering the packet-sending loop\n");
         //this loop is reentered everytime an ACK (not duplicate) is received and window has shifted
         for (int i =start_empty_index; i<window_size; i++)
         {   
@@ -231,6 +236,7 @@ int main (int argc, char **argv)
                 break;
             }
 
+
             sndpkt = make_packet(len);
             //store the data into the packet by copying from the buffer
             memcpy(sndpkt->data, buffer, len);
@@ -241,6 +247,8 @@ int main (int argc, char **argv)
             //send_base will be updated when ACK is properly received, not here
             //for the first packet, next_seqno = send_base =0, so it makes sense as well
 
+            printf("Sending packet: %d\n", sndpkt->hdr.seqno);
+            //Host name needs to be added
             window[i].packet = sndpkt;
             window[i].is_sent = 1;
             window[i].is_acked = 0;
