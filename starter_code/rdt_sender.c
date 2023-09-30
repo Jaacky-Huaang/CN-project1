@@ -10,6 +10,7 @@
 #include <sys/time.h>
 #include <time.h>
 #include <assert.h>
+#include <math.h>
 
 #include"packet.h"
 #include"common.h"
@@ -28,13 +29,45 @@ struct sockaddr_in serveraddr;
 struct itimerval timer; 
 struct timeval current_time;
 
-PacketStatus window[window_size];
+PacketStatus window[10];
+
 int duplicate_ack = 0;
-int duplicate_count=0
+int duplicate_count=0;
 
 tcp_packet *sndpkt;
 tcp_packet *recvpkt;
 sigset_t sigmask;      
+
+
+void init_timer(int delay, void (*sig_handler)(int)) 
+{
+    signal(SIGALRM, sig_handler);
+    timer.it_interval.tv_sec = delay / 1000;    // sets an interval of the timer
+    timer.it_interval.tv_usec = (delay % 1000) * 1000;  
+    timer.it_value.tv_sec = delay / 1000;       // sets an initial value
+    timer.it_value.tv_usec = (delay % 1000) * 1000;
+
+    sigemptyset(&sigmask);
+    sigaddset(&sigmask, SIGALRM);
+}
+
+void start_timer()
+{
+    sigprocmask(SIG_UNBLOCK, &sigmask, NULL);
+    setitimer(ITIMER_REAL, &timer, NULL);
+}
+
+void stop_timer()
+{
+    sigprocmask(SIG_BLOCK, &sigmask, NULL);
+}
+
+float get_time_difference(struct timeval t1, struct timeval t2)
+{
+    float diff = (t1.tv_sec - t2.tv_sec) * 1000.0f;
+    diff += (t1.tv_usec - t2.tv_usec) / 1000.0f;
+    return diff;
+}
 
 //the signal-handler function to deal with timeout
 void resend_packets(int sig)
@@ -59,8 +92,23 @@ void resend_packets(int sig)
                 //recursively call itself untill timeout stops occuring 
                 //which is when stop_timer() function is called 
                 //which is when ACK is properly received
-                init_timer(RETRY, resend_packets);
+
+                //record current time in current_time
+                gettimeofday(&current_time,NULL);
+                //calculate the time that the first packet has spent in flight
+                //if it has not been sent, window[0].sent_time would be very close to current_time
+                //therefore, the timeout would be basically RETRY
+                float flight_time = get_time_difference(current_time, window[0].sent_time);
+                //if flight_time is negative, it means that the last packet in the window is also timeout
+                //so we set the timeout to be very small to resend the last packet immediately
+                if (flight_time < 0)
+                {
+                    flight_time = 1/100000;
+                }
+                
+                init_timer(RETRY-flight_time, resend_packets);
                 start_timer();
+
                 free(sndpkt);
                 break;
             }
@@ -69,45 +117,14 @@ void resend_packets(int sig)
     }
 }
 
-
-void start_timer()
-{
-    sigprocmask(SIG_UNBLOCK, &sigmask, NULL);
-    setitimer(ITIMER_REAL, &timer, NULL);
-}
-
-
-
-void stop_timer()
-{
-    sigprocmask(SIG_BLOCK, &sigmask, NULL);
-}
-
-float get_time_difference(struct timeval t1, struct timeval t2)
-{
-    float diff = (t1.tv_sec - t2.tv_sec) * 1000.0f;
-    diff += (t1.tv_usec - t2.tv_usec) / 1000.0f;
-    return diff;
-}
-
 /*
  * init_timer: Initialize timer
  * delay: delay in milliseconds
  * sig_handler: signal handler function for re-sending unACKed packets
  */
-void init_timer(int delay, void (*sig_handler)(int)) 
-{
-    signal(SIGALRM, sig_handler);
-    timer.it_interval.tv_sec = delay / 1000;    // sets an interval of the timer
-    timer.it_interval.tv_usec = (delay % 1000) * 1000;  
-    timer.it_value.tv_sec = delay / 1000;       // sets an initial value
-    timer.it_value.tv_usec = (delay % 1000) * 1000;
 
-    sigemptyset(&sigmask);
-    sigaddset(&sigmask, SIGALRM);
-}
 
-int find_start_of_empty_slots(struct PacketStatus* window, int size) {
+int find_start_of_empty_slots(PacketStatus window[], int size) {
     for (int i = size - 1; i >= 0; i--) 
     {
         if (window[i].packet != NULL) 
@@ -118,7 +135,7 @@ int find_start_of_empty_slots(struct PacketStatus* window, int size) {
     return 0;  
 }
 
-void initialize_window_slot(struct PacketStatus window_slot) 
+void initialize_window_slot(PacketStatus window_slot) 
 {
     window_slot.packet = NULL;
     window_slot.is_sent = 0;
@@ -128,7 +145,6 @@ void initialize_window_slot(struct PacketStatus window_slot)
     
 }
 
-
 int main (int argc, char **argv)
 {
     int portno, len;
@@ -136,6 +152,8 @@ int main (int argc, char **argv)
     char *hostname;
     char buffer[DATA_SIZE];
     FILE *fp;
+
+    PacketStatus window[window_size];
 
     /* check command line arguments */
     if (argc != 4) {
@@ -236,6 +254,7 @@ int main (int argc, char **argv)
             }
 
             //initialize the timer for the send_base of the current window 
+            //?
             if (i==0)
             {   
                 //record current time in current_time
@@ -244,6 +263,13 @@ int main (int argc, char **argv)
                 //if it has not been sent, window[0].sent_time would be very close to current_time
                 //therefore, the timeout would be basically RETRY
                 float flight_time = get_time_difference(current_time, window[0].sent_time);
+                //if flight_time is negative, it means that the last packet in the window is also timeout
+                //so we set the timeout to be very small to resend the last packet immediately
+                if (flight_time < 0)
+                {
+                    flight_time = 1/100000;
+                }
+                
                 init_timer(RETRY-flight_time, resend_packets);
                 start_timer();
             }
@@ -345,8 +371,8 @@ int main (int argc, char **argv)
                         duplicate_count = 0;
                         stop_timer();
                         // resend the oldest packet immediately by making the timeout very small 
-                        timer.it_value.tv_sec = 1 / 1000;
-                        timer.it_value.tv_usec = (1 % 1000) * 1000;
+                        timer.it_value.tv_sec = 1 / 100000;
+                        timer.it_value.tv_usec = (1 % 100000) * 1000;
                         start_timer();
                     }
                 }
