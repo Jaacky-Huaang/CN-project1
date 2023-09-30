@@ -217,6 +217,7 @@ int main (int argc, char **argv)
         //this loop is reentered everytime an ACK (not duplicate) is received and window has shifted
         for (int i =start_empty_index; i<window_size; i++)
         {   
+            
             //read data from the file, "len" is the data size of the current packet i
             len = fread(buffer, 1, DATA_SIZE, fp);
 
@@ -291,106 +292,106 @@ int main (int argc, char **argv)
             
 
         }
-    }
+    
 
         char ack_buffer[MSS_SIZE];
         //in the previous while loop, packets have been sent
         //here in this while loop, we wait for ACKs
-        while (1) 
-        {   
+          
 
-            //get the ACK from the receiver
-            if(recvfrom(sockfd, ack_buffer, MSS_SIZE, 0,(struct sockaddr *) &serveraddr, (socklen_t *)&serverlen) < 0)
-            {
-            error("recvfrom");
-            }
+        //get the ACK from the receiver
+        if(recvfrom(sockfd, ack_buffer, MSS_SIZE, 0,(struct sockaddr *) &serveraddr, (socklen_t *)&serverlen) < 0)
+        {
+        error("recvfrom");
+        }
 
-            recvpkt = (tcp_packet *)ack_buffer;
-            printf("%d \n", get_data_size(recvpkt));
-            assert(get_data_size(recvpkt) <= DATA_SIZE);
+        recvpkt = (tcp_packet *)ack_buffer;
+        printf("%d \n", get_data_size(recvpkt));
+        assert(get_data_size(recvpkt) <= DATA_SIZE);
 
-            //case 1: the sequence number of the received ACK packet = last_seqno
-            //which has been recorded when the last packet was sent
-            if(recvpkt->hdr.ackno == last_seqno) 
-            {
+        //case 1: the sequence number of the received ACK packet = last_seqno
+        //which has been recorded when the last packet was sent
+        if(recvpkt->hdr.ackno == last_seqno) 
+        {
+        stop_timer();
+        VLOG(INFO, "Received last ACK");
+        //break from the loop of waiting for ACK
+        return 0;
+        }
+
+        //case 2: the sequence number of the received ACK packet > send_base
+        if (recvpkt->hdr.ackno > send_base)
+        {
+            //update send_base with the cumulative ACK
+            //this means every packet before recvpkt->hdr.ackno has been ACKed
+            send_base = recvpkt->hdr.ackno;
+
+            // stop the timer. 
             stop_timer();
-            VLOG(INFO, "Received last ACK");
-            //break from the loop of waiting for ACK
-            break;
+
+            //calculate how many window slots need to be shifted
+            int shift = ceil(recvpkt->hdr.ackno - send_base)/MSS_SIZE;
+            
+            //update the window
+            //free the memory of the ACKed packet
+            for (int i = 0; i < shift; i++) 
+            {   
+                window[i].is_acked = 1;  
+                free(window[i].packet);  // Free the tcp_packet
+                
             }
 
-            //case 2: the sequence number of the received ACK packet > send_base
-            if (recvpkt->hdr.ackno > send_base)
+            //move the oldest un-ACKed packet to the beginning of the window
+            for (int i=0; i<window_size-shift; i++)
             {
-                //update send_base with the cumulative ACK
-                //this means every packet before recvpkt->hdr.ackno has been ACKed
-                send_base = recvpkt->hdr.ackno;
-
-                // stop the timer. 
-                stop_timer();
-
-                //calculate how many window slots need to be shifted
-                int shift = ceil(recvpkt->hdr.ackno - send_base)/MSS_SIZE;
-                
-                //update the window
-                //free the memory of the ACKed packet
-                for (int i = 0; i < shift; i++) 
-                {   
-                    window[i].is_acked = 1;  
-                    free(window[i].packet);  // Free the tcp_packet
-                    
-                }
-
-                //move the oldest un-ACKed packet to the beginning of the window
-                for (int i=0; i<window_size-shift; i++)
-                {
-                    window[i] = window[i+shift];
-                }
-                
-                //clear the remaining slots in the window for the new packets
-                for (int i = window_size - shift; i < window_size; i++) 
-                {
-                    initialize_window_slot(window[i]);
-                }
-                
-                
+                window[i] = window[i+shift];
             }
             
-            //case 3: the sequence number of the received ACK packet < send_base
-            //this means the ACK is for a packet that has been ACKed before (a duplicate ACK)
-            else if (recvpkt->hdr.ackno < send_base)
-            {   
-                //duplicate_ack is the sequence number of the last ACKed packet
-                if (recvpkt->hdr.ackno != duplicate_ack)
+            //clear the remaining slots in the window for the new packets
+            for (int i = window_size - shift; i < window_size; i++) 
+            {
+                initialize_window_slot(window[i]);
+            }
+            
+            
+        }
+        
+        //case 3: the sequence number of the received ACK packet < send_base
+        //this means the ACK is for a packet that has been ACKed before (a duplicate ACK)
+        else if (recvpkt->hdr.ackno < send_base)
+        {   
+            //duplicate_ack is the sequence number of the last ACKed packet
+            if (recvpkt->hdr.ackno != duplicate_ack)
+            {
+                duplicate_ack = recvpkt->hdr.ackno;
+                duplicate_count = 1;
+            } 
+            else 
+            {
+                if(duplicate_count < 3)
                 {
-                    duplicate_ack = recvpkt->hdr.ackno;
-                    duplicate_count = 1;
+                    //duplicate_count is the times of the same ACK received
+                    duplicate_count++; 
                 } 
-                else 
+                else
                 {
-                    if(duplicate_count < 3)
-                    {
-                        //duplicate_count is the times of the same ACK received
-                        duplicate_count++; 
-                    } 
-                    else
-                    {
-                        VLOG(INFO, "Received 3 dup ACK retransmitting: %d", send_base);
-                        duplicate_count = 0;
-                        stop_timer();
-                        // resend the oldest packet immediately by making the timeout very small 
-                        timer.it_value.tv_sec = 1 / 100000;
-                        timer.it_value.tv_usec = (1 % 100000) * 1000;
-                        start_timer();
-                    }
+                    VLOG(INFO, "Received 3 dup ACK retransmitting: %d", send_base);
+                    duplicate_count = 0;
+                    stop_timer();
+                    // resend the oldest packet immediately by making the timeout very small 
+                    timer.it_value.tv_sec = 1 / 100000;
+                    timer.it_value.tv_usec = (1 % 100000) * 1000;
+                    start_timer();
                 }
+            }
 
-            }     
+                
 
         }
 
+    }
     return 0;
-
+    
 }
 
 
