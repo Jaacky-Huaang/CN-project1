@@ -24,7 +24,7 @@ typedef struct {
     tcp_packet *packet;  // Pointer to the actual packet
     int is_sent;         // 1 if packet is sent, 0 otherwise
     int is_acked;        // 1 if ACK is received for this packet, 0 otherwise
-    timeval sent_time;   // Time at which packet was sent
+    struct timeval sent_time;   // Time at which packet was sent
 } PacketStatus;
 
 tcp_packet* make_packet(int seq);
