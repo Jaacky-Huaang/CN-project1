@@ -89,17 +89,15 @@ int main(int argc, char **argv) {
 
         // CASE 1: seq # > expected_next (missing packets in order)
         if (recvpkt->hdr.seqno > expected_next){
-
-            // check if it is the last packet
-            if (recvpkt->hdr.data_size == 0){ 
-                
+            if (recvpkt->hdr.data_size == 0){
+                //VLOG(INFO, "End of File has been reached");
+                // close file pointer
                 fclose(fp);
                 break;
             }
-
-            // if it is not the last packet, check the seq # of this packet
-            else if(get_data_size(recvpkt) != 0){
-                // check the seq # of this packet
+            
+            // check the seq # of this packet
+            else if (recvpkt->hdr.data_size != 0){
                 int difference = recvpkt->hdr.seqno - expected_next;
                 int integer = (int)((double) difference / DATA_SIZE);
                 int decimals = (double) difference / DATA_SIZE - integer;
@@ -113,19 +111,19 @@ int main(int argc, char **argv) {
                 }
                 this_packet_index = this_packet_index - 1;
 
-                // Case 1-1: this packet > current_last_packet
+                // CASE 1-1: this packet > current_index
                 if (this_packet_index > current_last_packet_index){
                     current_last_packet_index = this_packet_index;
 
                     // update buffer
                     memcpy(buffer[this_packet_index], recvpkt->data, get_data_size(recvpkt));
 
-                    // print info of the next packet
+                    // print info of the new packet
                     gettimeofday(&tp, NULL);
                     VLOG(DEBUG, "%lu, %d, %d", tp.tv_sec, recvpkt->hdr.data_size, recvpkt->hdr.seqno);
                 }
 
-                // Case 1-2: check duplicated packet - already buffered
+                // CASE 1-2: check if this packet received is already buffered
                 else{
                     if (strlen(buffer[this_packet_index]) == 0){
                         memcpy(buffer[this_packet_index], recvpkt->data, get_data_size(recvpkt));
@@ -154,28 +152,31 @@ int main(int argc, char **argv) {
         // CASE 3: seq # == expected_next (we have a new packet in order)
         else if (recvpkt->hdr.seqno == expected_next){
 
-            // check if it is the last packet
-            if (recvpkt->hdr.data_size > 0){ 
-                // if it fills the gap, check the last index of p
+            // check if the packet is the last packet
+            if (recvpkt->hdr.data_size == 0){
+                //VLOG(INFO, "End of File has been reached");
+                // close file pointer
                 fclose(fp);
                 break;
             }
+            
+            // check the seq # of this packet
+            else if (recvpkt->hdr.data_size != 0){
 
-            else if(get_data_size(recvpkt) != 0){
-                // received packet/data to be written to the file fp
+                // get the current time. log it fo debugging purposes
+                gettimeofday(&tp, NULL);
+                VLOG(DEBUG, "%lu, %d, %d", tp.tv_sec, recvpkt->hdr.data_size, recvpkt->hdr.seqno);
+
+                // received data is written to the file fp at the specified position
                 fseek(fp, recvpkt->hdr.seqno, SEEK_SET);
                 fwrite(recvpkt->data, 1, recvpkt->hdr.data_size, fp);
 
-                // print info of the next packet
-                gettimeofday(&tp, NULL);
-                VLOG(DEBUG, "%lu, %d, %d", tp.tv_sec, recvpkt->hdr.data_size, recvpkt->hdr.seqno);
-                
                 // update the expected_next #
                 expected_next += get_data_size(recvpkt);
 
-                // check if this packet can fill in the missing index of the buffer (missing packets0)
+                // check if this packet can fill in the missing index of the buffer (missing packets)
                 if(strlen(buffer[0]) > 0){
-
+                    
                     // check if the corrected order packet resolves the gap between expected_next
                     int in_order_packet_index = -1;
                     for (int i = 0; i <= current_last_packet_index; i++){
@@ -223,14 +224,25 @@ int main(int argc, char **argv) {
             sndpkt = make_packet(0);
             sndpkt->hdr.ackno = recvpkt->hdr.seqno + recvpkt->hdr.data_size; // set ackno field to seq number 
             sndpkt->hdr.ctr_flags = ACK;
-
             if (sendto(sockfd, sndpkt, TCP_HDR_SIZE, 0, 
                     (struct sockaddr *) &clientaddr, clientlen) < 0) {
                 error("ERROR in sendto");
             }
         }
 
-        // CASE 4: seq # < expected_next (discard the packets as they passed already)
+        // CASE 4: duplicate EOF packet
+        else if(recvpkt->hdr.seqno == expected_next){
+            // resend the packet
+            sndpkt = make_packet(0);
+            sndpkt->hdr.ackno = -1;
+            sndpkt->hdr.ctr_flags = ACK;
+            if (sendto(sockfd, sdpkt, TCP_HDR_SIZE, 0,
+                    (struct sockaddr *) &clientaddr, clientlen) < 0){
+                        error("ERROR in sendto");
+                    }
+        }
+
+        // CASE 5: seq # < expected_next (discard the packets as they passed already)
         else{
             sndpkt = make_packet(0);
             sndpkt->hdr.ackno = expected_next;
@@ -243,6 +255,4 @@ int main(int argc, char **argv) {
         }
 
     } // loop ends after end of file reached, file is closed, receiver program terminates 
-
-    return 0;
 }
