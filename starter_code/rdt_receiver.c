@@ -236,7 +236,7 @@ int main(int argc, char **argv) {
             sndpkt = make_packet(0);
             sndpkt->hdr.ackno = -1;
             sndpkt->hdr.ctr_flags = ACK;
-            if (sendto(sockfd, sdpkt, TCP_HDR_SIZE, 0,
+            if (sendto(sockfd, sndpkt, TCP_HDR_SIZE, 0,
                     (struct sockaddr *) &clientaddr, clientlen) < 0){
                         error("ERROR in sendto");
                     }
