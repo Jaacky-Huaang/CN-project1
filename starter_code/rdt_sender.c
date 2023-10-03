@@ -125,25 +125,27 @@ void resend_packets(int sig)
 
 
 int find_start_of_empty_slots(PacketStatus window[], int size) {
-    for (int i = size - 1; i >= 0; i--) 
+    for (int i = 0; i <size; i++) 
     {
-        if (window[i].packet != NULL) 
+        if (window[i].packet == NULL) 
         {
-            return i + 1;  
+            return i;  
+        }else{
+            printf("window[%d].packet: %s\n", i, window[i].packet->data);
         }
     }
     return 0;  
 }
 
-void initialize_window_slot(PacketStatus window_slot) 
+void initialize_window_slot(PacketStatus *window_slot) 
 {
-    window_slot.packet = NULL;
-    window_slot.is_sent = 0;
-    window_slot.is_acked = 0;
-    window_slot.sent_time.tv_sec = 0;
-    window_slot.sent_time.tv_usec = 0;
-    
+    window_slot->packet = NULL;
+    window_slot->is_sent = 0;
+    window_slot->is_acked = 0;
+    window_slot->sent_time.tv_sec = 0;
+    window_slot->sent_time.tv_usec = 0;
 }
+
 
 int main (int argc, char **argv)
 {
@@ -200,7 +202,7 @@ int main (int argc, char **argv)
 
     //initialize the window to be all 0
     for (int i = 0; i < window_size; i++) {
-        initialize_window_slot(window[i]);
+        initialize_window_slot(&window[i]);
     }
 
     printf("Entering the main loop\n");
@@ -217,9 +219,9 @@ int main (int argc, char **argv)
         
         printf("entering the packet-sending loop\n");
         //this loop is reentered everytime an ACK (not duplicate) is received and window has shifted
-        for (int i =start_empty_index; i<window_size; i++)
+        for (int i = start_empty_index; i<window_size; i++)
         {   
-            
+            printf("i: %d\n", i);
             //read data from the file, "len" is the data size of the current packet i
             len = fread(buffer, 1, DATA_SIZE, fp);
             printf("len: %d\n", len);
@@ -258,8 +260,14 @@ int main (int argc, char **argv)
             //store the data into the packet by copying from the buffer
             memcpy(sndpkt->data, buffer, len);
             send_base = next_seqno;
+            printf("send_base: %d\n", send_base);
+            printf("next_seqno: %d\n", next_seqno);
             //update the sequence number of the next packet
+
             next_seqno = send_base + len;
+            printf("send_base: %d\n", send_base);
+            printf("next_seqno: %d\n", next_seqno);
+
             sndpkt->hdr.seqno = send_base;
             //send_base will be updated when ACK is properly received, not here
             //for the first packet, next_seqno = send_base =0, so it makes sense as well
@@ -272,12 +280,13 @@ int main (int argc, char **argv)
             //record the time stamp of the current packet's sent time
             gettimeofday(&window[i].sent_time, NULL);
 
+
             //failure to send
             if(sendto(sockfd, sndpkt, TCP_HDR_SIZE + get_data_size(sndpkt), 0, (const struct sockaddr *)&serveraddr, serverlen) < 0)
             {
             error("the packet is not sent");
             }
-
+            
             //initialize the timer for the send_base of the current window 
             //?
             if (i==0)
@@ -293,7 +302,7 @@ int main (int argc, char **argv)
                 //so we set the timeout to be very small to resend the last packet immediately
                 if (flight_time < 0)
                 {
-                    flight_time = 1/100000;
+                    flight_time = RETRY-1/100000;
                 }
                 printf("initializing timer\n");
                 init_timer(RETRY-flight_time, resend_packets);
@@ -307,11 +316,9 @@ int main (int argc, char **argv)
             //if the first packet is sent, it becomes the oldest packet in flight
             //so we start the timer of it
             free(sndpkt);
-
         }
         
     
-
         char ack_buffer[MSS_SIZE];
         //in the previous while loop, packets have been sent
         //here in this while loop, we wait for ACKs
@@ -347,35 +354,33 @@ int main (int argc, char **argv)
             // stop the timer. 
             stop_timer();
 
-            //calculate how many window slots need to be shifted
+            // calculate how many window slots need to be shifted
+            // shift # = # of ACKed packets
             int shift = ceil(recvpkt->hdr.ackno - send_base)/MSS_SIZE;
             
-            //update the window
-            //free the memory of the ACKed packet
+            // update the window
+            // free the memory of the ACKed packet in windows array
             for (int i = 0; i < shift; i++) 
             {   
                 window[i].is_acked = 1;  
                 free(window[i].packet);  // Free the tcp_packet
-                
             }
 
-            //move the oldest un-ACKed packet to the beginning of the window
-            for (int i=0; i<window_size-shift; i++)
+            // setting the oldest un-ACKed to the beginning of the window
+            for (int i=0; i < window_size - shift; i++)
             {
                 window[i] = window[i+shift];
             }
             
-            //clear the remaining slots in the window for the new packets
+            // emptying the remaining slots to be filled with new packets
             for (int i = window_size - shift; i < window_size; i++) 
             {
-                initialize_window_slot(window[i]);
+                initialize_window_slot(&window[i]);
             }
-            
-            
         }
         
-        //case 3: the sequence number of the received ACK packet < send_base
-        //this means the ACK is for a packet that has been ACKed before (a duplicate ACK)
+        // case 3: the sequence number of the received ACK packet < send_base
+        // this means the ACK is for a packet that has been ACKed before (a duplicate ACK)
         else if (recvpkt->hdr.ackno < send_base)
         {   
             //duplicate_ack is the sequence number of the last ACKed packet
@@ -402,14 +407,10 @@ int main (int argc, char **argv)
                     start_timer();
                 }
             }
-
-                
-
         }
 
     }
     return 0;
-    
 }
 
 
