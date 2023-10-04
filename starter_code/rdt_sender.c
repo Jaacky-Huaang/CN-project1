@@ -36,7 +36,7 @@ int duplicate_count=0;
 
 tcp_packet *sndpkt;
 tcp_packet *recvpkt;
-sigset_t sigmask;      
+sigset_t sigmask; 
 
 
 void init_timer(int delay, void (*sig_handler)(int)) 
@@ -205,6 +205,13 @@ int main (int argc, char **argv)
         initialize_window_slot(&window[i]);
     }
 
+    //to get the file size and print it
+    //to make sure sample.txt is not cleared and file_size!=0
+    fseek(fp, 0, SEEK_END);
+    int file_size = ftell(fp);
+    printf("File size: %ld bytes\n", file_size);
+    fseek(fp, 0, SEEK_SET);
+
     printf("Entering the main loop\n");
     //loop while EOF is not reached
     while (1)
@@ -226,10 +233,7 @@ int main (int argc, char **argv)
             len = fread(buffer, 1, DATA_SIZE, fp);
             printf("len: %d\n", len);
 
-            fseek(fp, 0, SEEK_END);
-            int file_size = ftell(fp);
-            printf("File size: %ld bytes\n", file_size);
-            fseek(fp, 0, SEEK_SET);
+            
             if (feof(fp)) 
             {
                 printf("End of file by system\n");
@@ -280,6 +284,8 @@ int main (int argc, char **argv)
             //record the time stamp of the current packet's sent time
             gettimeofday(&window[i].sent_time, NULL);
 
+            //window[i].packet->hdr.data_size = len;
+
 
             //failure to send
             if(sendto(sockfd, sndpkt, TCP_HDR_SIZE + get_data_size(sndpkt), 0, (const struct sockaddr *)&serveraddr, serverlen) < 0)
@@ -324,6 +330,9 @@ int main (int argc, char **argv)
         //here in this while loop, we wait for ACKs
           
 
+
+
+        
         //get the ACK from the receiver
         if(recvfrom(sockfd, ack_buffer, MSS_SIZE, 0,(struct sockaddr *) &serveraddr, (socklen_t *)&serverlen) < 0)
         {
