@@ -131,7 +131,7 @@ int find_start_of_empty_slots(PacketStatus window[], int size) {
         {
             return i;  
         }else{
-            printf("window[%d].packet: %s\n", i, window[i].packet->data);
+            //printf("window[%d].packet: %s\n", i, window[i].packet->data);
         }
     }
     return 0;  
@@ -249,7 +249,9 @@ int main (int argc, char **argv)
                 VLOG(INFO, "End Of File has been reached");
                 sndpkt = make_packet(0);
                 //record the sequence number of the last packet as the current sequence number
+
                 last_seqno = next_seqno;
+                printf("last_seqno: %d\n", last_seqno);
                 sendto(sockfd, sndpkt, TCP_HDR_SIZE,  0,
                         (const struct sockaddr *)&serveraddr, serverlen);
                 free(sndpkt);
@@ -264,13 +266,11 @@ int main (int argc, char **argv)
             //store the data into the packet by copying from the buffer
             memcpy(sndpkt->data, buffer, len);
             send_base = next_seqno;
-            printf("send_base: %d\n", send_base);
-            printf("next_seqno: %d\n", next_seqno);
             //update the sequence number of the next packet
 
             next_seqno = send_base + len;
-            printf("send_base: %d\n", send_base);
-            printf("next_seqno: %d\n", next_seqno);
+            printf("send_base after updating: %d\n", send_base);
+            printf("next_seqno after updating: %d\n", next_seqno);
 
             sndpkt->hdr.seqno = send_base;
             //send_base will be updated when ACK is properly received, not here
@@ -292,6 +292,10 @@ int main (int argc, char **argv)
             {
             error("the packet is not sent");
             }
+
+            //clear the buffer
+            memset(buffer, 0, sizeof(buffer));  
+
             
             //initialize the timer for the send_base of the current window 
             //?
@@ -325,99 +329,122 @@ int main (int argc, char **argv)
         }
         
     
-        char ack_buffer[MSS_SIZE];
+        //char ack_buffer[MSS_SIZE];
+        char ack_buffer[3000];
         //in the previous while loop, packets have been sent
         //here in this while loop, we wait for ACKs
           
 
 
-
-        
-        //get the ACK from the receiver
-        if(recvfrom(sockfd, ack_buffer, MSS_SIZE, 0,(struct sockaddr *) &serveraddr, (socklen_t *)&serverlen) < 0)
+        //------------------------------------------------------------------------------------
+        //in this loop, we wait for ACK with sequence number > send_base that allows the window to slide
+        //so we break from the loop for case 1 and case 2
+        while(1)
         {
-        error("recvfrom");
-        }
+            printf("entering the ACK-receiving loop\n");
+            //get the ACK from the receiver
+            if(recvfrom(sockfd, ack_buffer, MSS_SIZE, 0,(struct sockaddr *) &serveraddr, (socklen_t *)&serverlen) < 0)
+            {
+                error("ERROR in recvfrom\n");
+            }
 
-        recvpkt = (tcp_packet *)ack_buffer;
-        printf("%d \n", get_data_size(recvpkt));
-        assert(get_data_size(recvpkt) <= DATA_SIZE);
+            printf("ack_buffer: %s\n", ack_buffer);
+            recvpkt = (tcp_packet *)ack_buffer;
+            VLOG(INFO, "Received the ACK");
+            printf("Received ACK with seqno: %d\n", recvpkt->hdr.seqno);
+            printf("packet size: %d \n", recvpkt->hdr.data_size); 
+            assert(get_data_size(recvpkt) <= DATA_SIZE);
 
-        //case 1: the sequence number of the received ACK packet = last_seqno
-        //which has been recorded when the last packet was sent
-        if(recvpkt->hdr.ackno == last_seqno) 
-        {
-        stop_timer();
-        VLOG(INFO, "Received last ACK");
-        //break from the loop of waiting for ACK
-        return 0;
-        }
 
-        //case 2: the sequence number of the received ACK packet > send_base
-        if (recvpkt->hdr.ackno > send_base)
-        {
-            //update send_base with the cumulative ACK
-            //this means every packet before recvpkt->hdr.ackno has been ACKed
-            send_base = recvpkt->hdr.ackno;
+            //case 1: the sequence number of the received ACK packet = last_seqno
+            //which has been recorded when the last packet was sent
+            if(recvpkt->hdr.ackno == last_seqno) 
+            {
+                stop_timer();
+                VLOG(INFO, "Received last ACK");
+                //break from the loop of waiting for ACK and exiting the whole program
+                //reinitialize the recvpkt and 
+                //memset(recvpkt, 0, sizeof(tcp_packet));
+                //memset(ack_buffer, 0, sizeof(ack_buffer));
+                return 0;
+            }
 
-            // stop the timer. 
-            stop_timer();
 
-            // calculate how many window slots need to be shifted
-            // shift # = # of ACKed packets
-            int shift = ceil(recvpkt->hdr.ackno - send_base)/MSS_SIZE;
+            //case 2: the sequence number of the received ACK packet > send_base
+            if (recvpkt->hdr.ackno > send_base)
+            {
+                //update send_base with the cumulative ACK
+                //this means every packet before recvpkt->hdr.ackno has been ACKed
+                send_base = recvpkt->hdr.ackno;
+
+                // stop the timer. 
+                stop_timer();
+
+                // calculate how many window slots need to be shifted
+                // shift # = # of ACKed packets
+                int shift = ceil(recvpkt->hdr.ackno - send_base)/MSS_SIZE;
+                
+                // update the window
+                // free the memory of the ACKed packet in windows array
+                for (int i = 0; i < shift; i++) 
+                {   
+                    window[i].is_acked = 1;  
+                    free(window[i].packet);  // Free the tcp_packet
+                }
+
+                // setting the oldest un-ACKed to the beginning of the window
+                for (int i=0; i < window_size - shift; i++)
+                {
+                    window[i] = window[i+shift];
+                }
+                
+                // emptying the remaining slots to be filled with new packets
+                for (int i = window_size - shift; i < window_size; i++) 
+                {
+                    initialize_window_slot(&window[i]);
+                }
+
+                //reinitialize the recvpkt and 
+                //memset(recvpkt, 0, sizeof(tcp_packet));
+                //memset(ack_buffer, 0, sizeof(ack_buffer));
+
+                //break from the loop and go to fill the window with more packets
+                break;
+            }
             
-            // update the window
-            // free the memory of the ACKed packet in windows array
-            for (int i = 0; i < shift; i++) 
+            // case 3: the sequence number of the received ACK packet < send_base
+            // this means the ACK is for a packet that has been ACKed before (a duplicate ACK)
+            else if (recvpkt->hdr.ackno < send_base)
             {   
-                window[i].is_acked = 1;  
-                free(window[i].packet);  // Free the tcp_packet
-            }
-
-            // setting the oldest un-ACKed to the beginning of the window
-            for (int i=0; i < window_size - shift; i++)
-            {
-                window[i] = window[i+shift];
-            }
-            
-            // emptying the remaining slots to be filled with new packets
-            for (int i = window_size - shift; i < window_size; i++) 
-            {
-                initialize_window_slot(&window[i]);
-            }
-        }
-        
-        // case 3: the sequence number of the received ACK packet < send_base
-        // this means the ACK is for a packet that has been ACKed before (a duplicate ACK)
-        else if (recvpkt->hdr.ackno < send_base)
-        {   
-            //duplicate_ack is the sequence number of the last ACKed packet
-            if (recvpkt->hdr.ackno != duplicate_ack)
-            {
-                duplicate_ack = recvpkt->hdr.ackno;
-                duplicate_count = 1;
-            } 
-            else 
-            {
-                if(duplicate_count < 3)
+                //duplicate_ack is the sequence number of the last ACKed packet
+                if (recvpkt->hdr.ackno != duplicate_ack)
                 {
-                    //duplicate_count is the times of the same ACK received
-                    duplicate_count++; 
+                    duplicate_ack = recvpkt->hdr.ackno;
+                    duplicate_count = 1;
                 } 
-                else
+                else 
                 {
-                    VLOG(INFO, "Received 3 dup ACK retransmitting: %d", send_base);
-                    duplicate_count = 0;
-                    stop_timer();
-                    // resend the oldest packet immediately by making the timeout very small 
-                    timer.it_value.tv_sec = 1 / 100000;
-                    timer.it_value.tv_usec = (1 % 100000) * 1000;
-                    start_timer();
+                    if(duplicate_count < 3)
+                    {
+                        //duplicate_count is the times of the same ACK received
+                        duplicate_count++; 
+                    } 
+                    else
+                    {
+                        VLOG(INFO, "Received 3 dup ACK retransmitting: %d", send_base);
+                        duplicate_count = 0;
+                        stop_timer();
+                        // resend the oldest packet immediately by making the timeout very small 
+                        timer.it_value.tv_sec = 1 / 100000;
+                        timer.it_value.tv_usec = (1 % 100000) * 1000;
+                        start_timer();
+                    }
+                //reinitialize the recvpkt and 
+                //memset(recvpkt, 0, sizeof(tcp_packet));
+                //memset(ack_buffer, 0, sizeof(ack_buffer));
                 }
             }
         }
-
     }
     return 0;
 }
