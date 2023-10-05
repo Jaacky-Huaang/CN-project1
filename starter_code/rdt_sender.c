@@ -29,16 +29,16 @@ struct sockaddr_in serveraddr;
 struct itimerval timer; 
 struct timeval current_time;
 
-PacketStatus window[10];
+PacketStatus window[10];//PacketStatus is a new struct defined in packet.h to store the status of each packet in the window
 
-int duplicate_ack = 0;
-int duplicate_count=0;
+int duplicate_ack = 0; //the sequence number of the last ACKed packet
+int duplicate_count=0; //the times of the last ACK received, it will triger fast retransmit when it reaches 3
 
 tcp_packet *sndpkt;
 tcp_packet *recvpkt;
 sigset_t sigmask; 
 
-
+//the signal-handler function to deal with timeout, "resend_packets" is passed in as the "sig_handler" parameter
 void init_timer(int delay, void (*sig_handler)(int)) 
 {
     signal(SIGALRM, sig_handler);
@@ -51,17 +51,20 @@ void init_timer(int delay, void (*sig_handler)(int))
     sigaddset(&sigmask, SIGALRM);
 }
 
+//to start the timer
 void start_timer()
 {
     sigprocmask(SIG_UNBLOCK, &sigmask, NULL);
     setitimer(ITIMER_REAL, &timer, NULL);
 }
 
+//to stop the timer
 void stop_timer()
 {
     sigprocmask(SIG_BLOCK, &sigmask, NULL);
 }
 
+//to calculate the time difference between two timevals
 float get_time_difference(struct timeval t1, struct timeval t2)
 {
     float diff = (t1.tv_sec - t2.tv_sec) * 1000.0f;
@@ -74,13 +77,15 @@ void resend_packets(int sig)
 {
     if (sig == SIGALRM)
     {
-        VLOG(INFO, "Timout happend");
+        VLOG(INFO, "Timeout happend");
         //if timeout happens, it means that the oldest packet in the window has not been ACKed
-        //resend the all the packets in the window that has not been acked yet
+        //resend all the packets in the window that has not been acked yet
         for (int i = 0; i < window_size; i++)
         {
+            //to find the packets that has been sent but not acked according to their status
             if (window[i].is_sent && !window[i].is_acked)
             {
+                //get the packet from window (PacketStatus struct)
                 sndpkt = window[i].packet;
                 VLOG(INFO, "Resending packet: %d", sndpkt->hdr.seqno);
                 if(sendto(sockfd, sndpkt, TCP_HDR_SIZE + get_data_size(sndpkt), 0, 
@@ -88,8 +93,7 @@ void resend_packets(int sig)
                 {
                     error("sendto");
                 }
-                //start a new timer for the oldest packet in the window
-                //recursively call itself untill timeout stops occuring 
+                //set a new time for the timer of the oldest packet in the window
                 //which is when stop_timer() function is called 
                 //which is when ACK is properly received
 
@@ -99,6 +103,7 @@ void resend_packets(int sig)
                 //if it has not been sent, window[0].sent_time would be very close to current_time
                 //therefore, the timeout would be basically RETRY
                 float flight_time = get_time_difference(current_time, window[0].sent_time);
+
                 //if flight_time is negative, it means that the last packet in the window is also timeout
                 //so we set the timeout to be very small to resend the last packet immediately
                 if (flight_time < 0)
@@ -117,13 +122,6 @@ void resend_packets(int sig)
     }
 }
 
-/*
- * init_timer: Initialize timer
- * delay: delay in milliseconds
- * sig_handler: signal handler function for re-sending unACKed packets
- */
-
-
 int find_start_of_empty_slots(PacketStatus window[], int size) {
     for (int i = 0; i <size; i++) 
     {
@@ -134,9 +132,10 @@ int find_start_of_empty_slots(PacketStatus window[], int size) {
             //printf("window[%d].packet: %s\n", i, window[i].packet->data);
         }
     }
-    return 0;  
+    return -1;   //if the window is full, return -1 to indicate
 }
 
+//to initialize a window slot in the window
 void initialize_window_slot(PacketStatus *window_slot) 
 {
     window_slot->packet = NULL;
@@ -150,16 +149,14 @@ void initialize_window_slot(PacketStatus *window_slot)
 int main (int argc, char **argv)
 {
     int portno, len;
-    int next_seqno;
     char *hostname;
     char buffer[MSS_SIZE];
     FILE *fp;
-
     PacketStatus window[window_size];
+    //PacketStatus is a new struct defined in packet.h to store the status of each packet in the window
+    //window is an array of PacketStatus struct
 
-    printf("parsing arguments\n");
     /* check command line arguments */
-    
     if (argc != 4) {
         fprintf(stderr,"usage: %s <hostname> <port> <FILE>\n", argv[0]);
         exit(0);
@@ -167,41 +164,38 @@ int main (int argc, char **argv)
     
     hostname = argv[1];
     portno = atoi(argv[2]);
+
+    //opening the file
     fp = fopen(argv[3], "r");
-    if (fp == NULL) {
+    if (fp == NULL) 
+    {
         error(argv[3]);
     }
 
-    printf("creating socket\n");
     /* socket: create the socket */
     sockfd = socket(AF_INET, SOCK_DGRAM, 0);
     if (sockfd < 0) 
         error("ERROR opening socket");
 
-    printf("initializing server\n");
     /* initialize server server details */
     bzero((char *) &serveraddr, sizeof(serveraddr));
     serverlen = sizeof(serveraddr);
 
     /* covert host into network byte order */
-    if (inet_aton(hostname, &serveraddr.sin_addr) == 0) {
+    if (inet_aton(hostname, &serveraddr.sin_addr) == 0)
+    {
         fprintf(stderr,"ERROR, invalid host %s\n", hostname);
         exit(0);
     }
 
-    printf("setting server address\n");
     /* build the server's Internet address */
     serveraddr.sin_family = AF_INET;
     serveraddr.sin_port = htons(portno);
-
     assert(MSS_SIZE - TCP_HDR_SIZE > 0);
 
-    //Stop and wait protocol
-
-    next_seqno = 0;
-
     //initialize the window to be all 0
-    for (int i = 0; i < window_size; i++) {
+    for (int i = 0; i < window_size; i++) 
+    {
         initialize_window_slot(&window[i]);
     }
 
@@ -209,150 +203,179 @@ int main (int argc, char **argv)
     //to make sure sample.txt is not cleared and file_size!=0
     fseek(fp, 0, SEEK_END);
     int file_size = ftell(fp);
-    printf("File size: %ld bytes\n", file_size);
+    printf("File size: %d bytes\n", file_size);
     fseek(fp, 0, SEEK_SET);
 
-    printf("Entering the main loop\n");
     //loop while EOF is not reached
+    //this is the main loop comprising of two sub-loops
+    //the first sub-loop is to send packets
+    //the second sub-loop is to receive ACKs
     while (1)
     {   
         //find the first index of empty slots in the window
         int start_empty_index = find_start_of_empty_slots(window, window_size);
-
-        //the window would be left with packets sent but not ACKed
-        //if the window is full, start_empty_index=window_size
-        //the loop would not be entered, and would be waiting for ACK
-        //if there are empty slots in the window, fill them with packets and send them out
-        
-        printf("entering the packet-sending loop\n");
-        //this loop is reentered everytime an ACK (not duplicate) is received and window has shifted
-        for (int i = start_empty_index; i<window_size; i++)
-        {   
-            printf("i: %d\n", i);
-            //read data from the file, "len" is the data size of the current packet i
-            len = fread(buffer, 1, DATA_SIZE, fp);
-            printf("len: %d\n", len);
-
+        if (start_empty_index == -1)
+        {
+            printf("the window is full\n");
+        }
+        else if (next_seqno >= file_size)//if the file is all loaded in the window
+        {
+            printf("the file is completely read\n");
+            //if the window is full, start_empty_index=window_size
+            //the first sub-loop would not be entered, and would jump to the second
+            //sub-loop and wait for ACKs
+        }
+        else//if there are empty slots in the window, fill them with packets and send them out
+        {
+            printf("the first empty slot in the window: %d\n", start_empty_index);
             
-            if (feof(fp)) 
-            {
-                printf("End of file by system\n");
-            } else if (ferror(fp)) 
-            {
-                perror("Error reading file");
-            }
+            //the window would be left with packets sent but not ACKed
+            printf("start sending packets...\n");
+            printf("the oldest packet in this window: %d\n", send_base);
+            printf("the next packet to be sent: %d\n", next_seqno);
 
-
-            //if EOF is reached, send an empty packet
-            if (len <= 0)
-            {
-                VLOG(INFO, "End Of File has been reached");
-                sndpkt = make_packet(0);
-                //record the sequence number of the last packet as the current sequence number
-
-                last_seqno = next_seqno;
-                printf("last_seqno: %d\n", last_seqno);
-                sendto(sockfd, sndpkt, TCP_HDR_SIZE,  0,
-                        (const struct sockaddr *)&serveraddr, serverlen);
-                free(sndpkt);
-                //remember to close the file
-                fclose(fp);
-                //break from the loop when file is completely read
-                break;
-            }
-
-
-            sndpkt = make_packet(len);
-            //store the data into the packet by copying from the buffer
-            memcpy(sndpkt->data, buffer, len);
-            send_base = next_seqno;
-            //update the sequence number of the next packet
-
-            next_seqno = send_base + len;
-            printf("send_base after updating: %d\n", send_base);
-            printf("next_seqno after updating: %d\n", next_seqno);
-
-            sndpkt->hdr.seqno = send_base;
-            //send_base will be updated when ACK is properly received, not here
-            //for the first packet, next_seqno = send_base =0, so it makes sense as well
-
-            printf("Sending packet: %d\n", sndpkt->hdr.seqno);
-            //Host name needs to be added
-            window[i].packet = sndpkt;
-            window[i].is_sent = 1;
-            window[i].is_acked = 0;
-            //record the time stamp of the current packet's sent time
-            gettimeofday(&window[i].sent_time, NULL);
-
-            //window[i].packet->hdr.data_size = len;
-
-
-            //failure to send
-            if(sendto(sockfd, sndpkt, TCP_HDR_SIZE + get_data_size(sndpkt), 0, (const struct sockaddr *)&serveraddr, serverlen) < 0)
-            {
-            error("the packet is not sent");
-            }
-
-            //clear the buffer
-            memset(buffer, 0, sizeof(buffer));  
-
-            
-            //initialize the timer for the send_base of the current window 
-            //?
-            if (i==0)
+            //this loop is reentered everytime an ACK (not duplicate) is received and window has shifted
+            for (int i = start_empty_index; i<window_size; i++)
             {   
+                //printf("i: %d\n", i);
+                //read data from the file, "len" is the data size of the current packet i
+                len = fread(buffer, 1, DATA_SIZE, fp);
+                //printf("len: %d\n", len);
 
-                //record current time in current_time
-                gettimeofday(&current_time,NULL);
-                //calculate the time that the first packet has spent in flight
-                //if it has not been sent, window[0].sent_time would be very close to current_time
-                //therefore, the timeout would be basically RETRY
-                float flight_time = get_time_difference(current_time, window[0].sent_time);
-                //if flight_time is negative, it means that the last packet in the window is also timeout
-                //so we set the timeout to be very small to resend the last packet immediately
-                if (flight_time < 0)
+                //if the file is completely read
+                if (feof(fp)) 
                 {
-                    flight_time = RETRY-1/100000;
+                    printf("End Of File\n");
+                } else if (ferror(fp)) 
+                {
+                    perror("Error reading file\n");
                 }
-                printf("initializing timer\n");
-                init_timer(RETRY-flight_time, resend_packets);
-                start_timer();
+
+
+                //if EOF is reached, send an empty packet
+                /*
+                if (len <= 0)
+                {
+                    VLOG(INFO, "End Of File has been reached");
+                    sndpkt = make_packet(0);
+                    //record the sequence number of the last packet as the current sequence number
+
+                    last_seqno = next_seqno;
+                    printf("last_seqno: %d\n", last_seqno);
+                    sendto(sockfd, sndpkt, TCP_HDR_SIZE,  0,
+                            (const struct sockaddr *)&serveraddr, serverlen);
+                    free(sndpkt);
+                    //remember to close the file
+                    fclose(fp);
+                    //break from the loop when file is completely read
+                    break;
+                }
+                */
+
+                sndpkt = make_packet(len);
+                //store the data into the packet by copying from the buffer
+                memcpy(sndpkt->data, buffer, len);
+
+                sndpkt->hdr.seqno = next_seqno;
+                //update the current packet's sequence number with the next sequence number
+                //send_base will be updated when ACK is properly received, not here
+                //for the first packet, next_seqno = send_base =0, so it makes sense as well
+                //update the sequence number of the next packet
+
+                next_seqno += len;
+                //update the sequence number of the next packet
+
+                printf("send_base after updating: %d\n", send_base);
+                printf("next_seqno after updating: %d\n", next_seqno);
+                printf("Sending packet: %d to host %s\n", sndpkt->hdr.seqno, inet_ntoa(serveraddr.sin_addr));
+                printf("----------------------------------\n");
+
+                //update the packet status in the window
+                window[i].packet = sndpkt;
+                window[i].is_sent = 1;
+                window[i].is_acked = 0;
+                //record the time stamp of the current packet's sent time
+                //which will be used to reset the timer
+                gettimeofday(&window[i].sent_time, NULL);
+
+                //after preparation work, send the packet
+                if(sendto(sockfd, sndpkt, TCP_HDR_SIZE + get_data_size(sndpkt), 0, (const struct sockaddr *)&serveraddr, serverlen) < 0)
+                {
+                error("the packet is not sent");
+                }
+
+                //clear the buffer
+                memset(buffer, 0, sizeof(buffer));  
+
+                
+                //initialize the timer for the send_base of the current window 
+                if (i==0)
+                {   
+
+                    //record current time in current_time
+                    gettimeofday(&current_time,NULL);
+                    //calculate the time that the first packet has spent in flight
+                    //if it has not been sent, window[0].sent_time would be very close to current_time
+                    //therefore, the timeout would be basically RETRY
+                    float flight_time = get_time_difference(current_time, window[0].sent_time);
+                    //if flight_time is negative, it means that the last packet in the window is also timeout
+                    //so we set the timeout to be very small to resend the last packet immediately
+                    if (flight_time < 0)
+                    {
+                        flight_time = RETRY-1/100000;
+                    }
+                    printf("initializing timer with time%f\n", RETRY-flight_time);
+                    init_timer(RETRY-flight_time, resend_packets);
+                    start_timer();
+                }
+
+                if (len < DATA_SIZE)
+                {
+                    VLOG(INFO, "End Of File has been reached");
+                    //record the sequence number of the last packet as the current sequence number
+                    last_seqno = next_seqno;
+                    //printf("last_seqno: %d\n", last_seqno);
+                    free(sndpkt);
+                    //remember to close the file
+                    fclose(fp);
+                    //break from the loop when file is completely read
+                    break;
+                }
+                
+                //if the first packet is sent, it becomes the oldest packet in flight
+                //so we start the timer of it
+                free(sndpkt);
             }
-
-            //free up the memory after sent
-            //memset(sndpkt->data,0, strlen(buffer[0]));
-            
-
-            //if the first packet is sent, it becomes the oldest packet in flight
-            //so we start the timer of it
-            free(sndpkt);
         }
         
+
+        
+        
     
-        //char ack_buffer[MSS_SIZE];
-        char ack_buffer[3000];
+        char ack_buffer[MSS_SIZE];
         //in the previous while loop, packets have been sent
         //here in this while loop, we wait for ACKs
           
 
 
         //------------------------------------------------------------------------------------
-        //in this loop, we wait for ACK with sequence number > send_base that allows the window to slide
+        //in this second sub-loop, we wait for ACK with sequence number > send_base that allows the window to slide
         //so we break from the loop for case 1 and case 2
         while(1)
         {
-            printf("entering the ACK-receiving loop\n");
+            printf("waiting for ACK...\n");
             //get the ACK from the receiver
-            if(recvfrom(sockfd, ack_buffer, MSS_SIZE, 0,(struct sockaddr *) &serveraddr, (socklen_t *)&serverlen) < 0)
-            {
+            int bytes_received = recvfrom(sockfd, ack_buffer, MSS_SIZE, 0,(struct sockaddr *) &serveraddr, (socklen_t *)&serverlen);
+            if(bytes_received < 0) {
                 error("ERROR in recvfrom\n");
+            } else {
+                //printf("Received %d bytes.\n", bytes_received);
             }
 
-            printf("ack_buffer: %s\n", ack_buffer);
             recvpkt = (tcp_packet *)ack_buffer;
-            VLOG(INFO, "Received the ACK");
-            printf("Received ACK with seqno: %d\n", recvpkt->hdr.seqno);
-            printf("packet size: %d \n", recvpkt->hdr.data_size); 
+            //VLOG(INFO, "Received the ACK");
+            printf("Received ACK with seqno: %d\n", recvpkt->hdr.ackno);
+            //printf("packet size: %d \n", recvpkt->hdr.data_size); 
             assert(get_data_size(recvpkt) <= DATA_SIZE);
 
 
@@ -363,33 +386,35 @@ int main (int argc, char **argv)
                 stop_timer();
                 VLOG(INFO, "Received last ACK");
                 //break from the loop of waiting for ACK and exiting the whole program
-                //reinitialize the recvpkt and 
-                //memset(recvpkt, 0, sizeof(tcp_packet));
-                //memset(ack_buffer, 0, sizeof(ack_buffer));
                 return 0;
             }
 
 
             //case 2: the sequence number of the received ACK packet > send_base
             if (recvpkt->hdr.ackno > send_base)
-            {
-                //update send_base with the cumulative ACK
-                //this means every packet before recvpkt->hdr.ackno has been ACKed
-                send_base = recvpkt->hdr.ackno;
-
+            {   
+                //printf("this is the case where recvpkt->hdr.ackno > send_base\n");
+            
                 // stop the timer. 
                 stop_timer();
 
                 // calculate how many window slots need to be shifted
                 // shift # = # of ACKed packets
-                int shift = ceil(recvpkt->hdr.ackno - send_base)/MSS_SIZE;
+                int shift = (recvpkt->hdr.ackno - send_base)/DATA_SIZE;
+                //printf("send_base: %d\n", send_base);
+                //printf("recvpkt->hdr.ackno: %d\n", recvpkt->hdr.ackno);
+                //printf("shift %d slots of the window\n", shift);
+
+                //update send_base with the cumulative ACK
+                //this means every packet before recvpkt->hdr.ackno has been ACKed
+                send_base = recvpkt->hdr.ackno;
                 
                 // update the window
                 // free the memory of the ACKed packet in windows array
                 for (int i = 0; i < shift; i++) 
-                {   
-                    window[i].is_acked = 1;  
-                    free(window[i].packet);  // Free the tcp_packet
+                {    
+                    window[i].packet = NULL;  // Free the tcp_packet
+
                 }
 
                 // setting the oldest un-ACKed to the beginning of the window
@@ -404,9 +429,6 @@ int main (int argc, char **argv)
                     initialize_window_slot(&window[i]);
                 }
 
-                //reinitialize the recvpkt and 
-                //memset(recvpkt, 0, sizeof(tcp_packet));
-                //memset(ack_buffer, 0, sizeof(ack_buffer));
 
                 //break from the loop and go to fill the window with more packets
                 break;
@@ -416,6 +438,7 @@ int main (int argc, char **argv)
             // this means the ACK is for a packet that has been ACKed before (a duplicate ACK)
             else if (recvpkt->hdr.ackno < send_base)
             {   
+                //printf("this is the case where recvpkt->hdr.ackno < send_base\n");
                 //duplicate_ack is the sequence number of the last ACKed packet
                 if (recvpkt->hdr.ackno != duplicate_ack)
                 {
@@ -430,8 +453,9 @@ int main (int argc, char **argv)
                         duplicate_count++; 
                     } 
                     else
-                    {
-                        VLOG(INFO, "Received 3 dup ACK retransmitting: %d", send_base);
+                    {   
+                        //if there are three consecutive duplicate ACKs, fast retransmit
+                        printf("3 duplicate ACK retransmitting: %d", send_base);
                         duplicate_count = 0;
                         stop_timer();
                         // resend the oldest packet immediately by making the timeout very small 
