@@ -149,16 +149,24 @@ int main(int argc, char **argv) {
         // CASE 3: seq # == expected_next (we have a new packet in order)
         else if (recvpkt->hdr.seqno == expected_next){
 
+            // Pointer Null Checks
+            if (recvpkt == NULL) {
+                printf("recvpkt is NULL. Exiting.\n");
+                exit(1);
+            }
+
             // check if the packet is the last packet
             if (recvpkt->hdr.data_size == 0){
                 //VLOG(INFO, "End of File has been reached");
+                if (fp == NULL) {
+                    printf("File pointer is NULL. Exiting.\n");
+                    exit(1);
+                }
                 // close file pointer
                 fclose(fp);
+                fp = NULL; // Safety after freeing or closing
                 break;
             }
-            
-            // check the seq # of this packet
-            // get the current time. log it fo debugging purposes
             else{
                 gettimeofday(&tp, NULL);
                 VLOG(DEBUG, "%lu, %d, %d", tp.tv_sec, recvpkt->hdr.data_size, recvpkt->hdr.seqno);
@@ -170,13 +178,23 @@ int main(int argc, char **argv) {
                 // update the expected_next #
                 expected_next += get_data_size(recvpkt);
 
+                // Array Bounds check for buffer
+                if (current_last_packet_index >= sizeof(buffer) / sizeof(buffer[0])) {
+                    printf("Accessing buffer out of bounds. Index: %d. Exiting.\n", current_last_packet_index);
+                    exit(1);
+                }
+
                 // check if this packet can fill in the missing index of the buffer (missing packets)
                 if(strlen(buffer[0]) > 0){
                     
-                    // check if the corrected order packet resolves the gap between expected_next
                     int in_order_packet_index = -1;
                     for (int i = 0; i <= current_last_packet_index; i++){
-                        if(strlen(buffer[i] == 0)){
+                        if(i >= sizeof(buffer) / sizeof(buffer[0])) {
+                            printf("Trying to access buffer out of bounds. Index: %d. Exiting.\n", i);
+                            exit(1);
+                        }
+
+                        if(strlen(buffer[i]) == 0){
                             in_order_packet_index = i;
                             break;
                         }
@@ -186,16 +204,25 @@ int main(int argc, char **argv) {
                         in_order_packet_index = current_last_packet_index + 1;
                     }
 
-                    // write in file until last index of packet in order
+                    // Array Bounds check for buffer
+                    if (in_order_packet_index >= sizeof(buffer) / sizeof(buffer[0])) {
+                        printf("Accessing buffer out of bounds. Index: %d. Exiting.\n", in_order_packet_index);
+                        exit(1);
+                    }
+
                     fseek(fp, expected_next, SEEK_SET);
                     fwrite(buffer[0], 1, strlen(buffer[0]), fp);
                     expected_next += strlen(buffer[0]);
 
                     for (int i = 0; i < in_order_packet_index; i++){
+                        if(i >= sizeof(buffer) / sizeof(buffer[0])) {
+                            printf("Trying to access buffer out of bounds. Index: %d. Exiting.\n", i);
+                            exit(1);
+                        }
                         memset(buffer[i], 0, DATA_SIZE);
                     }
 
-                    // slide window according to how many indices have been filled in the buffer
+                    // slide window
                     if (in_order_packet_index < current_last_packet_index){
                         for (int i = 0; i < current_last_packet_index - in_order_packet_index; i++){
                             memcpy(buffer[i], buffer[i+in_order_packet_index], DATA_SIZE);
@@ -205,7 +232,6 @@ int main(int argc, char **argv) {
                         }
                     }
 
-                    // update the current_last_packet_index
                     if (current_last_packet_index > in_order_packet_index){
                         current_last_packet_index = current_last_packet_index - in_order_packet_index - 1;
                     }
@@ -215,8 +241,11 @@ int main(int argc, char **argv) {
                 }
             }
 
-            // send ACK
             sndpkt = make_packet(0);
+            if (sndpkt == NULL) {
+                printf("Memory allocation for sndpkt failed. Exiting.\n");
+                exit(1);
+            }
             sndpkt->hdr.ackno = expected_next;
             sndpkt->hdr.ctr_flags = ACK;
 
@@ -224,7 +253,14 @@ int main(int argc, char **argv) {
                     (struct sockaddr *) &clientaddr, clientlen) < 0) {
                 error("ERROR in sendto");
             }
+
+            // Safety after sending
+            if (sndpkt != NULL) {
+                free(sndpkt);
+                sndpkt = NULL;
+            }
         }
+
 
         // CASE 4: duplicate EOF packet
         else if(recvpkt->hdr.seqno == expected_next){
