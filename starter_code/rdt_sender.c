@@ -229,9 +229,16 @@ int main (int argc, char **argv){
                 len = fread(buffer, 1, DATA_SIZE, fp);
                 // printf("len: %d\n", len);
 
+
                 // if the file is completely read
                 if (feof(fp)) {
                     printf("End Of File\n");
+                    last_seqno = next_seqno;
+
+                    // remember to close the file
+                    fclose(fp);
+                    // break from the loop when file is completely read
+                    break;
                 } 
                 else if (ferror(fp)) {
                     perror("Error reading file\n");
@@ -296,16 +303,6 @@ int main (int argc, char **argv){
                 }
 
                 //free(sndpkt);
-                if (len < DATA_SIZE){
-                    VLOG(INFO, "End Of File has been reached");
-                    // record the sequence number of the last packet as the current sequence number
-                    last_seqno = next_seqno;
-                    // printf("last_seqno: %d\n", last_seqno);
-                    // remember to close the file
-                    fclose(fp);
-                    // break from the loop when file is completely read
-                    break;
-                }
                 
                 // if the first packet is sent, it becomes the oldest packet in flight
                 // so we start the timer of it
@@ -342,8 +339,17 @@ int main (int argc, char **argv){
             // CASE 1: the sequence number of the received ACK packet = last_seqno
             //which has been recorded when the last packet was sent
             if(recvpkt->hdr.ackno == last_seqno){
+                //send an empty packet to indicate the end of the file
+                tcp_packet *sndpkt;
+                sndpkt = make_packet(0);
+                sndpkt->hdr.seqno = next_seqno;
+                if(sendto(sockfd, sndpkt, 0, 0, (const struct sockaddr *)&serveraddr, serverlen) < 0){
+                    error("the last packet is not sent");
+                }
+
                 stop_timer();
                 VLOG(INFO, "Received last ACK");
+                printf("Sent the last packet\n");
                 //break from the loop of waiting for ACK and exiting the whole program
                 return 0;
             }
