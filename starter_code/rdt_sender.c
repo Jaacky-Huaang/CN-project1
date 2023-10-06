@@ -86,12 +86,10 @@ void resend_packets(int sig){
         VLOG(INFO, "Timeout happend");
         
         // find the oldest packet in the window that has been sent but not acked
-        
-        //printf("I am here");
         // retransmit the oldest packet in the window
-        print_window(window);
+        //print_window(window);
         //resndpkt = window[0].packet;
-        //VLOG(INFO, "Resending packet: %d", resndpkt->hdr.seqno);
+        VLOG(INFO, "Resending packet: %d", resndpkt->hdr.seqno);
         if (sendto(sockfd, resndpkt, TCP_HDR_SIZE + get_data_size(resndpkt), 0, 
                     (const struct sockaddr *)&serveraddr, serverlen) < 0) {
             error("sendto");
@@ -271,7 +269,7 @@ int main (int argc, char **argv){
                     error("the packet is not sent");
                 }
 
-                print_window(window);
+                //print_window(window);
                 //clear the buffer
                 //memset(buffer, 0, sizeof(buffer));  
 
@@ -280,6 +278,7 @@ int main (int argc, char **argv){
                 // initialize the timer for the send_base of the current window 
                 if (i==0){   
                     resndpkt=window[0].packet;
+                    printf("initializing resndpkt: %d\n", resndpkt->hdr.seqno);
                     // record current time in current_time
                     gettimeofday(&current_time,NULL);
                     // calculate the time that the first packet has spent in flight
@@ -301,7 +300,7 @@ int main (int argc, char **argv){
                     VLOG(INFO, "End Of File has been reached");
                     // record the sequence number of the last packet as the current sequence number
                     last_seqno = next_seqno;
-                    // printf("last_seqno: %d\n", last_seqno);
+                    printf("last_seqno: %d\n", last_seqno);
                     // remember to close the file
                     fclose(fp);
                     // break from the loop when file is completely read
@@ -376,6 +375,9 @@ int main (int argc, char **argv){
                     initialize_window_slot(&window[i]);
                 }
 
+                resndpkt=window[0].packet;
+                printf("initializing resndpkt: %d\n", resndpkt->hdr.seqno);
+
                 start_timer();
 
                 //break from the loop and go to fill the window with more packets
@@ -407,9 +409,9 @@ int main (int argc, char **argv){
                         //printf("index: %d\n", index);
                         //check the window status
                         
-                        print_window(window);
+                        //print_window(window);
                         tcp_packet* sndpkt = window[0].packet;
-                        VLOG(INFO, "Resending packet: %d", sndpkt->hdr.seqno);
+                        VLOG(INFO, "Resending packet after 3 duplicates: %d", sndpkt->hdr.seqno);
                         if (sendto(sockfd, sndpkt, TCP_HDR_SIZE + get_data_size(sndpkt), 0, 
                                     (const struct sockaddr *)&serveraddr, serverlen) < 0) 
                         {
