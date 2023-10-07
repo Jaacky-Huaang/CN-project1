@@ -39,6 +39,8 @@ tcp_packet *recvpkt;
 tcp_packet *resndpkt;
 sigset_t sigmask; 
 
+int timer_on = 0;
+
 //the signal-handler function to deal with timeout, "resend_packets" is passed in as the "sig_handler" parameter
 void init_timer(int delay, void (*sig_handler)(int)){
     signal(SIGALRM, sig_handler);
@@ -53,12 +55,14 @@ void init_timer(int delay, void (*sig_handler)(int)){
 
 //to start the timer
 void start_timer(){
+    timer_on = 1;
     sigprocmask(SIG_UNBLOCK, &sigmask, NULL);
     setitimer(ITIMER_REAL, &timer, NULL);
 }
 
 //to stop the timer
 void stop_timer(){
+    timer_on = 0;
     sigprocmask(SIG_BLOCK, &sigmask, NULL);
 }
 
@@ -102,6 +106,7 @@ void resend_packets(int sig){
         if (flight_time < 0) {
             flight_time = 1/100000; // set a very small timeout
         }
+        printf("initializing timer with time%f\n", RETRY-flight_time);
         init_timer(RETRY - flight_time, resend_packets);
         start_timer();
         //free(sndpkt);
@@ -274,7 +279,6 @@ int main (int argc, char **argv){
                 //memset(buffer, 0, sizeof(buffer));  
 
                 
-                
                 // initialize the timer for the send_base of the current window 
                 if (i==0){   
                     resndpkt=window[0].packet;
@@ -323,6 +327,12 @@ int main (int argc, char **argv){
         while(1)
         {
             printf("waiting for ACK...\n");
+
+            if (!timer_on){
+                printf("timer is not on\n");
+                start_timer();
+            }
+
             // get the ACK from the receiver
             int bytes_received = recvfrom(sockfd, ack_buffer, MSS_SIZE, 0,(struct sockaddr *) &serveraddr, (socklen_t *)&serverlen);
             if(bytes_received < 0){
@@ -344,6 +354,16 @@ int main (int argc, char **argv){
             if(recvpkt->hdr.ackno == last_seqno){
                 stop_timer();
                 VLOG(INFO, "Received last ACK");
+                //send an empty packet to signal the end of the transmission
+                tcp_packet *sndpkt;
+                sndpkt = make_packet(0);
+                sndpkt->hdr.seqno = last_seqno;
+                printf("Sending the last packet: %d to host %s\n", sndpkt->hdr.seqno, inet_ntoa(serveraddr.sin_addr));
+                if (sendto(sockfd, sndpkt, TCP_HDR_SIZE + get_data_size(sndpkt), 0, 
+                            (const struct sockaddr *)&serveraddr, serverlen) < 0) 
+                {
+                    error("sendto");
+                }
                 //break from the loop of waiting for ACK and exiting the whole program
                 return 0;
             }
