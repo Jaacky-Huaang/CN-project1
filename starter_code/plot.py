@@ -1,75 +1,39 @@
-import numpy as np
 import matplotlib.pyplot as plt
-import sys
-from argparse import ArgumentParser
 
-def scale(a):
-    return a/1000000.0
+x = []
+y1 = []
+y2 = []
 
-parser = ArgumentParser(description="plot")
+with open("CWND.csv", "r") as fp:
+    fp.readline()
+    for line in fp:
+        data = line.strip().split(",")
+        x.append(float(data[0]))
+        y1.append(float(data[1]))
+        y2.append(int(data[2]))
 
-parser.add_argument('--dir', '-d',
-                    help="Directory to store outputs",
-                    required=True)
+for i in range(1,len(x)):
+    x[i] -= x[0]
+x[0] = 0
 
-parser.add_argument('--name', '-n',
-                    help="name of the experiment",
-                    required=True)
+fig, ax1 = plt.subplots()
+ax2 = ax1.twinx()
 
-parser.add_argument('--trace', '-tr',
-                    help="name of the trace",
-                    required=True)
+# plot first set of data
+ax1.plot(x, y1, "g-")
+ax1.set_ylim([0, max(y1)])
+#ax1.set_ylim([0, 100])
+# plot second set of data
+ax2.step(x, y2, "r--")
+ax2.set_ylim([0, max(y1)])
+#ax2.set_xlim([0,5])
 
-args = parser.parse_args()
+ax1.set_ylabel("Window Size (num. packets)")
+ax1.set_xlabel("Time (seconds)")
+ax2.set_ylabel("ss_thresh (num. packets)")
 
-fig = plt.figure(figsize=(21,3), facecolor='w')
-ax = plt.gca()
-
-
-# plotting the trace file
-f1 = open (args.trace,"r")
-BW = []
-nextTime = 1000
-cnt = 0
-for line in f1:
-    if int(line.strip()) > nextTime:
-        BW.append(cnt*1492*8)
-        cnt = 0
-        nextTime+=1000
-    else:
-        cnt+=1
-f1.close()
-
-ax.fill_between(range(len(BW)), 0, list(map(scale,BW)),color='#D3D3D3')
-
-# plotting throughput
-throughputDL = []
-timeDL = []
-
-traceDL = open (args.dir+"/"+str(args.name), 'r')
-traceDL.readline()
-
-tmp = traceDL.readline().strip().split(",")
-bytes = int(tmp[1])
-startTime = float(tmp[0])
-stime=float(startTime)
-
-for time in traceDL:
-    if (float(time.strip().split(",")[0]) - float(startTime)) <= 1.0:
-        bytes += int(time.strip().split(",")[1])
-    else:
-        throughputDL.append(bytes*8/1000000.0)
-        timeDL.append(float(startTime)-stime)
-        bytes = int(time.strip().split(",")[1])
-        startTime += 1.0
-
-print (timeDL)
-print (throughputDL)
-
-plt.plot(timeDL, throughputDL, lw=2, color='r')
-
-plt.ylabel("Throughput (Mbps)")
-plt.xlabel("Time (s)")
-# plt.xlim([0,300])
-plt.grid(True, which="both")
-plt.savefig(args.dir+'/throughput.pdf',dpi=1000,bbox_inches='tight')
+    # set colours for each y-axis to tell them apart
+ax1.yaxis.label.set_color("g")
+ax2.yaxis.label.set_color("r")
+plt.show()
+plt.savefig("cwnd.pdf")
