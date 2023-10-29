@@ -29,7 +29,7 @@ struct sockaddr_in serveraddr;
 struct itimerval timer; 
 struct timeval current_time;
 
-PacketStatus window[10];//PacketStatus is a new struct defined in packet.h to store the status of each packet in the window
+PacketStatus window[64];//PacketStatus is a new struct defined in packet.h to store the status of each packet in the window
 
 int duplicate_ack = -1; //the sequence number of the last ACKed packet
 int duplicate_count = 0; //the times of the last ACK received, it will triger fast retransmit when it reaches 3
@@ -49,13 +49,15 @@ float dev_rtt = 0.0;
 int backoff_factor = 1;
 float RTO = 3000;
 int RTO_max = 240000; // the upper bound of RTO: 240s
-int ssthresh = 3; // initial ssthresh value should be equal to rwnd size
+int ssthresh = 64; // initial ssthresh value should be equal to rwnd size
 int max_window_size = 50; //  should be equal to rwnd size 
 float updating_cwnd = 1.0; // the size of the congestion window
 int used_cwnd = 1;
 int resend_flag = 1;
 struct timeval current_time;
 FILE *csv_file;
+int memo_packet_num; //a utility variable to record the original window size (how many packets are loaded in the memory)
+//this is useful when the window size is updated to be smaller than the original window size, and packets may get lost after being freed
 //----------------------------------------------------------------------
 
 //the signal-handler function to deal with timeout, "resend_packets" is passed in as the "sig_handler" parameter
@@ -120,12 +122,9 @@ void print_window(PacketStatus window[]){
 //the signal-handler function to deal with timeout
 void resend_packets(int sig){
     if (sig == SIGALRM) {
-        VLOG(INFO, "Timeout happend");
-        
+        VLOG(INFO, "Timeout happend");       
         // find the oldest packet in the window that has been sent but not acked
         // retransmit the oldest packet in the window
-        //print_window(window);
-        //resndpkt = window[0].packet;
         VLOG(INFO, "Resending packet: %d", resndpkt->hdr.seqno);
         if (sendto(sockfd, resndpkt, TCP_HDR_SIZE + get_data_size(resndpkt), 0, 
                     (const struct sockaddr *)&serveraddr, serverlen) < 0) {
@@ -151,18 +150,13 @@ void resend_packets(int sig){
         // update the sent time for the oldest packet in the window
         gettimeofday(&window[0].sent_time, NULL);
         
-        //printf("backoff_factor: %d\n", backoff_factor);
-        //printf("ssthresh: %d\n", ssthresh);
-        //printf("updating_cwnd: %f\n", updating_cwnd);
         if (RTO*backoff_factor > RTO_max)
         {
             init_timer(RTO_max, resend_packets);
-            //printf("initializing timer with time: %d\n", RTO_max);
         } 
         else 
         {
         init_timer(RTO*backoff_factor, resend_packets);
-        //printf("initializing timer with time: %f\n", RTO*backoff_factor);
         }
         resend_flag = 1;
         //--------------------------Congestion Control--------------------------
@@ -181,8 +175,6 @@ int find_start_of_empty_slots(PacketStatus window[], int size){
         if (window[i].packet == NULL) 
         {
             return i;  
-        }else{
-            //printf("window[%d].packet: %s\n", i, window[i].packet->data);
         }
     }
     return -1;   //if the window is full, return -1 to indicate
@@ -236,7 +228,7 @@ int main (int argc, char **argv){
     serverlen = sizeof(serveraddr);
 
     // Open the cwnd.csv file
-    csv_file = fopen("cwnd.csv", "w");
+    csv_file = fopen("CWND.csv", "w");
     if (csv_file == NULL) { 
         printf("Failure opening the csv file\n"); 
         return 0; 
@@ -278,7 +270,13 @@ int main (int argc, char **argv){
     // the second sub-loop is to receive ACKs
     while (1){   
         // find the first index of empty slots in the window
-        printf("the window size is: %d\n", used_cwnd);
+        init_timer(RTO, resend_packets);
+        //printf("the window size is: %d\n", used_cwnd);
+        if (used_cwnd > memo_packet_num)
+        {
+            memo_packet_num = used_cwnd;
+
+        }
         int start_empty_index = find_start_of_empty_slots(window, used_cwnd);
         if (start_empty_index == -1){
             VLOG(INFO, "Window is full");
@@ -297,10 +295,6 @@ int main (int argc, char **argv){
             
             
             // the window would be left with packets sent but not ACKed
-            //printf("start sending packets...\n");
-            //printf("the oldest packet in this window: %d\n", send_base);
-            //printf("the next packet to be sent: %d\n", next_seqno);
-
             // this loop is reentered everytime an ACK (not duplicate) is received and window has shifted
             for (int i = start_empty_index; i < used_cwnd; i++){   
 
@@ -328,11 +322,7 @@ int main (int argc, char **argv){
 
                 next_seqno += len;
                 //update the sequence number of the next packet
-
-                //printf("send_base after updating: %d\n", send_base);
-                //printf("next_seqno after updating: %d\n", next_seqno);
                 VLOG(INFO,"Sending packet: %d to host %s\n", sndpkt->hdr.seqno, inet_ntoa(serveraddr.sin_addr));
-                //printf("----------------------------------\n");
 
                 // update the packet status in the window
                 window[i].packet = sndpkt;
@@ -341,7 +331,6 @@ int main (int argc, char **argv){
                 // record the time stamp of the current packet's sent time
                 // which will be used to reset the timer
                 gettimeofday(&window[i].sent_time, NULL);
-                //printf("window[%d].sent_time: %ld.%06ld\n", i, window[i].sent_time.tv_sec, window[i].sent_time.tv_usec);
 
                 // after preparation work, send the packet
                 if(sendto(sockfd, sndpkt, TCP_HDR_SIZE + get_data_size(sndpkt), 0, (const struct sockaddr *)&serveraddr, serverlen) < 0){
@@ -438,8 +427,6 @@ int main (int argc, char **argv){
             // CASE 2: the sequence number of the received ACK packet > send_base
             if (recvpkt->hdr.ackno > send_base){   
                 // stop the timer. 
-                //printf("In case two before updating anything\n");
-                //print_window(window);
                 stop_timer();
 
                 // calculate how many window slots need to be shifted
@@ -451,10 +438,6 @@ int main (int argc, char **argv){
                 //-------------------------Congestion Control----------------------------
                 // calculate the time that the latest received packet has spent in flight
                 sample_rtt = get_time_difference(current_time, window[shift-1].sent_time);
-                
-                //printf("current_time: %ld.%06ld\n", current_time.tv_sec, current_time.tv_usec);
-                //printf("window[%d].sent_time: %ld.%06ld\n", shift-1, window[shift-1].sent_time.tv_sec, window[shift-1].sent_time.tv_usec);
-                //printf("sample_rtt: %f\n", sample_rtt);
 
                 // perform Karn's algorithm
                 // the coefficients are from the textbook
@@ -465,35 +448,25 @@ int main (int argc, char **argv){
                     backoff_factor = 1; 
                 }
                 resend_flag = 0; // update the flag to 0 after the sender retransmitted a packet
-                //printf("estimated_rtt: %f\n", estimated_rtt);
-                //printf("RTO: %f\n", RTO);
+                
 
                 // when in the slow start phase, the congestion window size increases by 1 MSS for each ACK received
                 //updating_cwnd : the float type of the congestion window size to keep track of the changes in cwnd
                 //used_cwnd : the int type of the actual size of the congestion window
                 if (updating_cwnd < ssthresh){
-                    printf("In slow start phase\n");
-                    printf("update the window by 1\n");
                     updating_cwnd += 1;
                 } else {
-                    printf("In congestion avoidance phase\n");
-                    printf("update the window by %f\n", 1.0/used_cwnd);
                     // when in the congestion avoidance phase, the congestion window size increases by 1/MSS for each ACK received
                     updating_cwnd += 1.0/used_cwnd;
 
                 }
                 
                 used_cwnd = (int)custom_round(updating_cwnd, 0.00001);// the actual size of the congestion window
-                printf("updating_window updated: %f\n", updating_cwnd);
-                printf("used_window updated: %d\n", used_cwnd);
-
 
                 gettimeofday(&current_time,0);
-                //fprintf(csvFile, "%ld.%06ld, %lf,%d\n", current_time.tv_sec, current_time.tv_usec, updating_cwnd,ssthresh);
+                fprintf(csv_file, "%ld.%06ld, %lf,%d\n", current_time.tv_sec, current_time.tv_usec, updating_cwnd,ssthresh);
 
                 //------------------Congestion Control--------------------
-                //printf("In case two aftercongestion control\n");
-                //print_window(window);
                 
                 // update send_base with the cumulative ACK (latest packet that was ACKed)
                 send_base = recvpkt->hdr.ackno;
@@ -504,17 +477,15 @@ int main (int argc, char **argv){
                 }
 
                 // setting the oldest un-ACKed to the beginning of the window
-                for (int i=0; i < used_cwnd - shift; i++){
+                for (int i=0; i < memo_packet_num - shift; i++){
                     window[i] = window[i+shift];
                 }
                 
                 // emptying the remaining slots to be filled with new packets
-                for (int i = used_cwnd - shift; i < used_cwnd; i++){
+                for (int i = memo_packet_num - shift; i < memo_packet_num; i++){
                     initialize_window_slot(&window[i]);
                 }
                 resndpkt=window[0].packet;
-                //printf("In case two after shifting the window\n");
-                //print_window(window);
 
                 start_timer();
 
@@ -565,19 +536,13 @@ int main (int argc, char **argv){
                         // update the sent time for the oldest packet in the window
                         gettimeofday(&window[0].sent_time, NULL);
                         
-                        //printf("backoff_factor: %d\n", backoff_factor);
-                        //printf("ssthresh: %d\n", ssthresh);
-                        //printf("updating_cwnd: %f\n", updating_cwnd);
-                        
                         if (RTO*backoff_factor > RTO_max)
                         {
                             init_timer(RTO_max, resend_packets);
-                            //printf("initializing timer with time: %d\n", RTO_max);
                         } 
                         else 
                         {
                         init_timer(RTO*backoff_factor, resend_packets);
-                        //printf("initializing timer with time: %f\n", RTO*backoff_factor);
                         }
                         resend_flag = 1;
                         //--------------------------Congestion Control--------------------------
