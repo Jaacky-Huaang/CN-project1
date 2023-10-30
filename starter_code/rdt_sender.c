@@ -260,9 +260,6 @@ int main (int argc, char **argv){
     fseek(fp, 0, SEEK_END);
     int file_size = ftell(fp);
     fseek(fp, 0, SEEK_SET);
-
-    
-    init_timer(RTO, resend_packets);
     
     // loop while EOF is not reached
     // this is the main loop comprising of two sub-loops
@@ -270,8 +267,7 @@ int main (int argc, char **argv){
     // the second sub-loop is to receive ACKs
     while (1){   
         // find the first index of empty slots in the window
-        init_timer(RTO, resend_packets);
-        //printf("the window size is: %d\n", used_cwnd);
+        //init_timer(RTO, resend_packets);
         if (used_cwnd > memo_packet_num)
         {
             memo_packet_num = used_cwnd;
@@ -341,7 +337,6 @@ int main (int argc, char **argv){
                 // initialize the timer for the send_base of the current window 
                 if (i==0){   
                     resndpkt=window[0].packet;
-                    //printf("initializing resndpkt: %d\n", resndpkt->hdr.seqno);
                     // record current time in current_time
                     gettimeofday(&current_time, NULL);
                     // calculate the time that the first packet has spent in flight
@@ -454,10 +449,10 @@ int main (int argc, char **argv){
                 //updating_cwnd : the float type of the congestion window size to keep track of the changes in cwnd
                 //used_cwnd : the int type of the actual size of the congestion window
                 if (updating_cwnd < ssthresh){
-                    updating_cwnd += 1;
+                    updating_cwnd += shift;
                 } else {
                     // when in the congestion avoidance phase, the congestion window size increases by 1/MSS for each ACK received
-                    updating_cwnd += 1.0/used_cwnd;
+                    updating_cwnd += (1.0/used_cwnd)*shift;
 
                 }
                 
